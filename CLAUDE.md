@@ -18,20 +18,17 @@ Related notes elsewhere (read them, don't repeat them here):
 
 - **2026-10-02:** skeleton created. Nothing works in game yet. It has passed only a luaparser syntax check and JSON
   validation.
+- **2026-10-02 (second session, Windows, game 42.21.0):** research finished and the plan below chosen
+  ("The plan: no hand swaps"). Clip mirroring is proven offline (`scripts/anim/mirror.py`, renders in `tmp/anim/`).
+  **Nothing has been tried in game yet.** Next step: the in-game prototype listed at the end of the plan.
 - **Design:** under discussion with the user (see "Open questions").
-- **Research:**
-  - Done and recorded below: multiplayer combat networking, the melee pipeline and the firearm pipeline.
-  - **Not recorded: the input / equipping / animation-set inventory.** It was still running when the session stopped
-    (2026-10-02), so redo it. Questions to cover:
-    - attack input and the default keys (Aim / Attack / Shove);
-    - `ISEquipWeaponAction` paths and the cleanest hand swap;
-    - left-hand hold masks (`LeftHandMask`, see firearms below);
-    - adding anim nodes gated on a custom variable;
-    - anim events reaching Lua;
-    - vanilla left-hand clips;
-    - joypad buttons.
-- **Decompile:** the 42.20 decompile used for this lives in a session scratchpad, so it is temporary. Re-create it with
-  the Vineflower recipe in ZomboidFixesB42/CLAUDE.md. Line numbers below are from that decompile (`zombie/...`).
+- **Decompile:** temporary, in a session scratchpad. Re-create it with the Vineflower recipe in ZomboidFixesB42/CLAUDE.md
+  (on Windows: the game's `jre64/bin/java.exe`; extract the jar's `zombie/` with Python `zipfile`, Git Bash `unzip`
+  stopped after 135 classes). Line numbers below were taken from 42.20; the ones re-checked in 42.21 (`Weapon.java`,
+  `SwipeStatePlayer` 128-134 / 199 / 209, `CombatManager` 518 / 670, `IsoGameCharacter` 16668) have not moved.
+- **PZ_Optimization** (installed on this machine) overrides `IsoPlayer`, `IsoGameCharacter`, `AnimationPlayer`,
+  `ModelManager` and more from the game folder. Research is done against the vanilla jar, since other players won't
+  have it; test in game with it removed too.
 
 ## What the user asked for (2026-10-02)
 
@@ -81,10 +78,15 @@ Source: aqxaromods mirror of the Workshop page (Steam returned 429). Workshop id
 - **Sandbox options** (`sandbox-options.txt`, page `TienDualwield`): one per feature, all on by default: `SwapHands`,
   `OffhandAttack`, `BothAttack`, `DualHandguns`. The penalty and tuning options wait for the design.
 - **Translations:** `Translate/EN/Sandbox.json`, `UI.json` (key binding labels), `IG_UI.json`.
+- **`scripts/anim/`** (python + numpy, Blender 5.2; they import TienInspectWeapon's `scripts/anim` pipeline from the
+  sibling repo, so keep both checked out side by side):
+  - `xmath.py`: world poses of a clip, the bind pose, L/R bone-name mirroring.
+  - `mirror.py <VanillaClip> <out.x> [--prop2 mirror|vanilla]`: writes the left/right mirror of a vanilla Bob clip.
+  - `preview2.py` (Blender): renders a clip with a machete on Prop1 (dark) and one on Prop2 (red), views front / q34 /
+    top: `"$BL" -b --factory-startup -P scripts/anim/preview2.py -- <clip.x> <abs out dir> every:2`.
 - **Not created yet:**
   - `poster.png` / `icon.png` / `preview.png` (mod.info has no poster/icon lines until they exist).
   - `media/AnimSets/player/...` and `media/anims_X/Bob/` (mirrored clips).
-  - `scripts/` (the clip mirroring tool, art script).
   - workshop.txt has no `id` yet (it gets one on first upload) and is `visibility=private`.
 
 ## Engine findings: who decides a hit in multiplayer (42.20)
@@ -503,6 +505,7 @@ Added after the melee and firearm inventories:
 - **The off-hand pistol's flash and tracer only come from the primary.** For two pistols, the only fully vanilla way to
   fire the off-hand gun (flash, tracer, ballistics, ammo, accepted by remote clients) is for it to be the primary for
   that shot.
+- *(Superseded by "The plan: no hand swaps" below, kept for the reasoning.)*
 - **So the candidate core for every feature is "the swinging/firing weapon is the primary for that attack".** It would be
   a fast swap before the attack plus a mirrored clip (hand models drawn so each weapon stays in its own hand). Its costs
   and risks (Equip traffic, `Weapon` / OnEquip churn, model jumps) are listed under EquipPacket above. Prototype it in MP
@@ -535,11 +538,240 @@ Added after the melee and firearm inventories:
   synced key is re-sent with every player update, so use at most one or two. Otherwise derive the state on each machine
   from things already synced (hand items via EquipPacket, `AttackType`, `CombatSpeed` in the hit packet).
 
+## Engine findings: sync, masks, input (42.21)
+
+- **Packet order:** VariableSync, Equip, State, AttackCollisionCheck and every PlayerHit* packet are reliability 3
+  (RELIABLE_ORDERED) on ordering channel 0 (priority 0 or 1; RakNet assigns the order index at send time). So a synced
+  variable set before a swing reaches the server, and is relayed to other clients, before that swing's hit packet.
+- **VariableSync** (`VariableSyncPacket`): the server sets the value on **its own copy** of the player (server Lua can
+  read it) and relays it at once to every connection `isRelevantTo` the player except the sender. Remote clients set it
+  on their copy. No Lua event fires for it anywhere.
+- **Cost of a synced key** (`addVariableToSyncList`, a global set shared by all mods): every `setVariable` of it by the
+  local player sends a packet, even with an unchanged value, so set it only on change. Every relayed PlayerUpdate is
+  followed by one VariableSync per synced key that is non-nil on that player (`PlayerPacket.java:200` →
+  `GameServer.setCustomVariables`, sent as a **string**), so use one key with string values. `clearVariable` is not
+  synced: write `""` instead.
+- **`InventoryItem:setID(id)`** is public, exposed, and only sets the field (no container map to update).
+- **Remote hit acceptance** (`fields/hit/Weapon.java`, unchanged in 42.21): bareHands ID first; on a client only
+  `getPrimaryHandItem():getID() == id` (an empty primary takes bareHands). A remote client then calls
+  `Player.attack()`: `setUseHandWeapon(weapon)`, copies AttackVars and the hit list, `pressedAttack()` (the remote swing
+  starts here, when the hit packet arrives), and `startMuzzleFlash` for a ranged weapon.
+- **Server side of an off-hand hit** (packet weapon = the secondary, found by ID in the inventory): damage from the
+  packet; `OnWeaponHitXp` with the secondary (its skill); `processMaintenanceCheck` passes because the server's
+  `useHandWeapon` is the melee primary (`setPrimaryHandItem` sets it; the server never runs the swing) and damages the
+  secondary, then `checkSyncItemFields` to the owner; endurance by the secondary. `removeKnife` (jaw stab) removes the
+  **primary**, so off-hand swings must never be knife crits. Firearms: `OnWeaponSwingHitPoint` → vanilla
+  `ISReloadWeaponAction.onShoot` takes ammo from the packet weapon, so an off-hand shot empties the off-hand gun.
+- **Vanilla `attackHook`** checks `canShoot` and plays the shot sound for the primary only; dual pistols need their own
+  hook (`Hook.Attack.Remove(ISReloadWeaponAction.attackHook)` + a wrapper).
+- **No Lua event for anim events** of the player's states (only timed actions get `animEvent`).
+- **Left-hand masks:** `actiongroups/player/<idle|aim|...>/to_maskingleft.xml` enters the `maskingleft` substate while
+  `LeftHandMask != ""`; its nodes (priority 10) weight `Bip01_L_Clavicle` + descendants and `Bip01_Prop2`. The swing
+  state (`melee`) has no maskingleft child, so masks are off during swings. `LeftHandMask` is set by `ModelManager`
+  from the secondary item's script and **cleared only when the hand models are rebuilt**; `IsoPlayer.updateAimingStance`
+  sets/clears `RaiseHand` the same way. Lua can set it to its own value (re-set it every tick). It is not synced, so each
+  machine sets it for every player from that player's hand items. `canPerformHandToHandCombat` blocks attacks only when
+  both hand **models** carry a mask value from their item scripts, which a Lua-set variable does not.
+- **Keys** (`shared/keyBinding.lua`): Attack = LMB, Aim = Left Ctrl (alt RMB), Melee (shove) = Space, Rack = X,
+  Reload = R, Manual floor attack = Left Alt.
+
+## Animation findings: mirroring (2026-10-02, verified offline)
+
+- **The bind pose is symmetric** across file X within 7 mm. Each Biped left bone's axes are the mirrored right bone's
+  turned 180° about Z (`K = (S·B_R·S)^-1·B_L`), the same for centre bones.
+- **Mirror formula** (`mirror.py`): `W'_b = S·W_m(b)·S·K_b`, then back to local; props use `K = I` (a weapon model has
+  no handedness convention: the long axis (+Y) and the edge (Z) mirror correctly, only the flat side (X) shows its other
+  face). Mirroring twice gives the original back within 0.1°. The first try used K = Z180 for the props and pointed
+  every blade backwards.
+- **Results:** `Bob_Attack1Hand01_Hit`, `Bob_Attack1Hand02_Hit` and `Bob_AttackKnife01_Hit` mirror into clean left-arm
+  swings with the blade leading like vanilla's (renders: `tmp/anim/sheet_swings.png`, `tmp/anim/mirror_test.gif`).
+- **Grips:** in every vanilla clip Prop2 sits exactly at the idle's left grip (`L_Hand⁻¹·Prop2` constant). Prop1 turns
+  in the right hand during swings (13° in 1Hand01, 34° in the knife stab). The mirrored right grip and vanilla's left
+  grip agree in position (6 mm) and long axis but differ by a **72° roll about the blade**. Vanilla's left grip is made
+  for torches and bags: in vanilla swings an off-hand blade lies across the belly. So:
+  - mirrored swings keep the mirrored grip (`--prop2 mirror`); with vanilla's grip the blade trails (`mirV` renders);
+  - a dual-wield left hold (a maskingleft node, below) should put Prop2 at the mirrored grip everywhere, so nothing
+    rolls when a swing starts;
+  - in mirrored swings the **main** weapon (Prop1) inherits the mirrored belly hold; set its track to
+    `R_Hand × the idle right grip` (or a guard pose) when building them.
+- The file's frame matrices still hold the source clip's first frame (`xanim.py` reports a Prop1 mismatch); the tracks
+  override them, as with TienInspectWeapon's clips. Untested in game.
+- **Clips to mirror** for melee (from `AnimSets/player/melee/1handed/*.xml`): `Bob_Attack1Hand01_Hit/HitB/HitC`
+  (2D blend by AttackVariationX/Y), `_CritHit`, `_Miss`, `Bob_Attack1Hand02_Hit/_CritHit`, `Bob_Attack1Hand03_Hit/_CritHit`,
+  `Bob_AttackFloor1Hand`, `Bob_AttackKnife01_Hit`, `Bob_AttackFloorStab`, `Bob_AimToIdle_1Hand` (transition). Knife
+  crits are excluded (jaw stab removes the primary). 1HDefault's `AttackCollisionCheck` is at 25% of the clip.
+
+## The plan: no hand swaps (2026-10-02)
+
+The items stay in their hands at all times. Only Lua state changes per attack.
+
+1. **Attacker's client:** the off-hand key (held) sets the one synced variable `TDW_Hand = "L"` (on change only), and
+   back to `""` once the swing's hit has been sent (after `AttackCollisionCheck`, e.g. `OnPlayerAttackFinished`). In
+   `OnWeaponSwing` (local player, `TDW_Hand == "L"`) call `setUseHandWeapon(secondary)`: damage, range, sounds, hit
+   events, packets and condition then follow the off-hand weapon. Override `setCombatSpeed` (it is computed from the
+   primary) and clear the crit for knives.
+2. **Animation, every machine:** nodes in `melee/1handed` with the vanilla conditions + `TDW_Hand = L` (one more
+   condition, so they win) play the mirrored clips. The left weapon is on Prop2 and stays in the left hand, so nothing
+   jumps.
+3. **Remote clients:** each tick, for every remote player whose `TDW_Hand` is `L`, swap the IDs of the local copies of
+   their two hand items (`setID`), and swap back when it returns to `""` (also after an EquipPacket replaces the
+   copies). The off-hand hit packet then matches the primary copy: the swing plays, damage lands, the zombie's owner
+   keeps the damage. The remote copy used for the hit is the right-hand item, so its hit sound may differ.
+   - **Risk:** if `TDW_Hand = L` and the hit packet arrive in the same frame, Lua has not run yet and the hit is dropped
+     (vanilla's off-hand behaviour, damage stays on the server). Holding the key gives a lead of reaction time plus the
+     25% wind-up, so this should be rare. Measure it in MP.
+4. **Server:** nothing to do for melee (see "Server side of an off-hand hit"). Anticheat rate is per player across both
+   weapons: pace "both at once" as a one-two.
+5. **Idle hold:** each machine sets `LeftHandMask = "TDWDualLeft"` on players holding two 1H weapons; a maskingleft
+   node with that condition (bones: L arm + Prop2, priority 10) holds Prop2 at the mirrored grip.
+6. **Dual pistols:** a second attack per trigger with `setUseHandWeapon(secondary)`, our own attack hook (ammo/jam check
+   and sound of the off-hand gun). Muzzle flash and tracer (see "Off-hand muzzle flash" below): move the primary gun's
+   muzzle attachment onto the left gun's muzzle for that shot.
+7. **Swap hands key:** one server-run timed action (an EquipPacket chain at the player's pace), no per-attack swaps.
+
+### Gun + melee (42.21)
+
+Routing facts:
+- `WeaponType.getWeaponType(chr)` re-sets `rangedWeapon` from the **primary** on every call (swing speed, weapon level,
+  timed actions, thermoregulator...), so Lua cannot override it: a handgun primary sends every attack through the
+  `ranged` action group (`idle|aim/to_ranged.xml`: initiateAttack + rangedWeapon + not bDoShove), a melee primary
+  through `melee`. Both run `SwipeStatePlayer`; our nodes go in whichever group the primary picks.
+- Gun or melee is decided **per attacking weapon** (`weapon.isAimedFirearm()` on `useHandWeapon`) in
+  `attackCollisionCheck` (~686: flash, ballistics, `fireWeapon`) and `calculateHitListWeapon` (range =
+  `weapon:getMaxRange(owner)`, re-run at the collision event). `AttackVars` holds no weapon: `getWeapon` returns
+  `useHandWeapon` unless the bare-hands flag is set.
+- `pressedAttack` (CombatManager 3140): starts only if `isDoShove() or isWeaponReady()`; `isRangedWeaponReady` fails
+  when `useHandWeapon` is an aimed firearm and the **primary's model script** has no `muzzle` attachment. With a ranged
+  primary (`WeaponType` HANDGUN) it sets the recoil delay from `useHandWeapon` and sends `PlayerEmptyShot` when
+  `useHandWeapon:getCurrentAmmoCount() == 0` (a melee weapon always is). Other clients answer `PlayerEmptyShot` by
+  starting an attack if their copy's weapon is an aimed firearm.
+- Ballistics run per frame only while `useHandWeapon` is an aimed firearm and the player aims
+  (`IsoGameCharacter` ~9160, also turns the player to the reticle); `CanAttack` resets `useHandWeapon` to the primary
+  every input frame. Remote clients start the flash from any hit packet that carries tracers (`PlayerHit.processTracers`)
+  and draw the tracers from the shooter's recorded start points. Zombie hit reactions travel in the packet.
+
+**Handgun primary + melee off-hand (off-hand melee swing): workable.**
+- Our `Hook.Attack` replaces vanilla's `attackHook` for this case (no gunshot sound, noise or `canShoot`); raise the
+  melee item's ammo count to 1 around `DoAttack` so `pressedAttack` sends no `PlayerEmptyShot`, then put it back.
+- `OnWeaponSwing` → `setUseHandWeapon(secondary)`: melee hit list with the knife's own range, melee packets, no flash.
+- Nodes in `AnimSets/player/ranged/handgun/` with `TDW_Hand = L` play the mirrored melee clips.
+- Server: condition loss needs `isActuallyAttackingWithMeleeWeapon`, which fails (the server's `useHandWeapon` is the
+  gun). `WeaponHit.process` fires `OnWeaponHitXp` right before `processMaintenanceCheck`, so a server handler sets
+  `player:setUseHandWeapon(weapon)` there when `weapon` is the secondary (put it back next tick). Object hits (doors,
+  windows) have no event first: no condition loss there.
+- Remote clients (ID swap): their weapon is the pistol copy, so `Player.attack` starts a muzzle flash (light + flash
+  model). Set the copy's `setMuzzleFlashModelKey(nil)` while `TDW_Hand = L`; the 6-tick light on the tile remains.
+- Hold pose: the vanilla handgun aim supports the gun with the left hand. A maskingleft node (L arm + Prop2) keeps the
+  melee weapon in a low guard while aiming; vanilla's `aimhandguntorchleft*.xml` is the model (torch in the left hand,
+  one-handed pistol aim).
+
+**Melee primary + handgun off-hand (off-hand shot): fights the engine.** The gun shot needs a `muzzle` attachment on the
+melee primary's model script (`ModelScript:addAttachment(ModelAttachment.new("muzzle"))`, placed at the left gun's
+muzzle in Prop1 space) or `pressedAttack` refuses and ballistics find no targets, and the melee item's
+`setMuzzleFlashModelKey` for a flash. The reticle, auto-facing, aim delay and accuracy all follow `useHandWeapon`, which
+`CanAttack` resets to the melee primary every frame, so the player would aim with melee rules. Better: the off-hand key
+**swaps hands** for this pair (one Equip each way at the player's pace, not per shot), so the gun is the primary while
+aiming and everything is vanilla. Keep the gun drawn in the left hand with crossed-prop aim clips (Prop1 at the left
+hand, valid while the clip dominates) or accept the visible switch. Needs the user's call (open questions).
+
+### Dual pistols: two bullets per trigger pull (42.21, the user's choice 2026-10-02)
+
+- **Chosen:** each pull fires the main gun normally, then the off-hand gun as a second attack. Each bullet leaves its own
+  muzzle (off-hand: muzzle redirect, see below) along its own barrel. Parallel barrels are fine (bullets pass about
+  20 cm either side of the aim point), so the converging-aim work below is optional polish.
+- **Why not one attack:** one attack has one bullet origin. Multi-projectile shots (`ProjectileCount`, used only on
+  the `isRangeFalloff` path in `fireWeapon`) spread every pellet from the one muzzle. A second `AttackCollisionCheck`
+  in the same swing is ignored (`ATTACKED`, reset only in `SwipeStatePlayer.enter`). Possible but worse fallback: the
+  primary with `setProjectileCount(2)` + range falloff for one pull, both lines from the right gun, the left gun's ammo
+  handled by our code (`HandWeapon:setProjectileCount` is public; the anticheat then allows `2 × MaxHitCount`).
+  The user is trying this one (2026-10-02). What the code does with it:
+  - `ProjectileCount` is read **only when `isRangeFalloff()`** (CombatManager 2161, 3568, `fireWeapon`); a pistol's
+    script has RangeFalloff off, so also call `setRangeFalloff(true)` (public).
+  - Pellets come from native `getSpreadData(range, ProjectileSpread × scale, ProjectileWeightCenter, count)`. A pistol's
+    `ProjectileSpread` is 0 (not in its script), so both pellets follow one line; the target then gets one HitInfo per
+    pellet that hit it (`spreadCount`, ~2220), i.e. two hits on the same zombie. For a chance of two different targets
+    set a small `setProjectileSpread` and `setMaxHitCount(2)` (`Base.Pistol` MaxHitCount = 1 caps the ranged hit list).
+  - Other falloff-path effects: hit force `rangeDel` 2.0 instead of 1.0 (~1011), no piercing damage reduction (~786), one
+    tracer per pellet from the right muzzle, in SP only the first hit of the shot gives XP (~1162).
+  - None of `projectileCount`, `projectileSpread`, `rangeFalloff`, `maxHitCount` is saved or sent: `Item.InstanceItem`
+    copies them from the script (1664, 1719), so every network copy and every reload is back to the script values.
+    **Set them on the server's copy too**: the anticheat reads the server copy's `ProjectileCount × MaxHitCount`; with 1,
+    a 2-pellet packet adds two entries and two pulls inside 450 ms make 4 > 3 (two violations kick).
+  - Ammo: vanilla `onShoot` takes one round from the primary only; the left gun's round, chamber and jam are ours
+    (server side + `syncHandWeaponFields`); drop back to 1 projectile when the left gun is empty or jammed.
+  - `-debug` has a Firearm debug window with a "Projectile Count" slider (`debug/debugWindows/FirearmPanel.java`).
+- **When the second attack can start:** `attackStarted` is cleared in `SwipeStatePlayer.exit` (446), and `CanAttack`
+  waits for the `AttackAnim` FALSE event. Vanilla's `Bob_AttackHandgun` is 0.67 s (shot at 0.1% of it, `ShotDone` at
+  90%), so use our own short dual fire clip with an early `AttackAnim` FALSE and `m_EarlyTransitionOut`. Trigger the
+  second attack from Lua on the next tick after `OnPlayerAttackFinished` (fires in `exit`, 468), not inside it.
+- **Anticheat sets the minimum gap.** `AntiCheatHitWeapon.isRateExceeded` → `AttackRateChecker.check`: an aimed
+  single-fire gun gets a 450 ms window (3 × 150 ms), and the check fails once it holds more than `3 × maxHits` hit
+  entries. `maxHits = ProjectileCount × MaxHitCount` (vanilla `Base.Pistol`: 1 × 1), or at least 3 with sandbox
+  MultiHitZombies. So with multi-hit off, **more than 3 hits in 450 ms per player** is a violation; two violations kick
+  by default. Only real hits count (PlayerHitSquare, i.e. misses, has no HitWeapon check). Keep every bullet
+  **more than 150 ms** after the previous one (e.g. 160 ms, entries exactly 150 ms apart still make 4 in the window):
+  the pair sounds like a quick "ba-bang", and the cap is about 6 bullets a second.
+
+### Dual-pistol aim that lines up with both guns (42.21)
+
+- **How vanilla aims:** `IsoPlayer.setAngleFromAim` (every frame while aiming a firearm) faces the character from its
+  centre (`getAimOriginPosX/Y` = position) towards the reticle point (`calculateAimVector`), and
+  `BallisticsController.updateAimingVector` sets `verticalAimAngle` from chest height (`getZ() + 0.495`) to the target.
+- **What the bullet system gets** (`BallisticsController.update`): the muzzle position (the primary model's `muzzle`
+  attachment, moved back along the barrel onto the plane through the character's centre), the muzzle direction and the
+  reticle position, all sent to native `Bullet` (PZBullet64.dll, closed). The target is the native hit if there is one,
+  else muzzle + direction × range. Tracers run from the muzzle position. Vanilla's one-gun aim pose keeps the gun near
+  the centre line, so barrel and aim line agree.
+- **Dual aim pose:** author both barrels **toed in** so they cross the centre line at the aim point. Each shot then
+  leaves its own muzzle and meets the reticle, and the tracers converge there.
+  - The handgun aim node (`aim/aim_handgun.xml`) is a 2D blend with X = `verticalAimAngle` (5 clips: Down75, Down, mid,
+    Up45, Up75). Our dual node can use X = `verticalAimAngle`, Y = a Lua-set float for the aim distance (near/far toe-in),
+    so 10 clips.
+  - Build them with TienInspectWeapon's `rig.py` (weapon-first keys + two-bone IK): place each gun so its barrel points
+    at the convergence point, then IK the arms. Square stance, not vanilla's 31° bladed pelvis.
+  - Aim distance on the attacker's client: `AimingReticle` is not exposed, but `getMouseX/Y` and `IsoUtils.XToIso/YToIso`
+    are. A gamepad's reticle is private, so use a fixed distance there. Other players' screens use a fixed distance (or
+    2-3 steps synced only on change), since tracers arrive with their start points anyway.
+- **Muzzle redirect per shot:** the offset and rotation written into the primary's `muzzle` attachment (Prop1 space) for
+  an off-hand shot = `Prop1⁻¹ · Prop2 · left muzzle`. This depends on the blend, so bake it per clip at build time and
+  interpolate in Lua from `verticalAimAngle` and the distance value.
+- **Untested:** whether native `Bullet` picks targets along the muzzle direction or near the reticle. With converging
+  barrels both agree. Check with `-debug` and DebugOptions `physicsRenderBallisticsControllers`.
+
+### Off-hand muzzle flash and tracer (42.21)
+
+- The engine flash is drawn only on `primaryHandModel` (`ModelSlotRenderData.initModelInst` ~215 →
+  `EffectsManager.initMuzzleFlashModel`), as the primary item's `getMuzzleFlashModelKey()` model on its `muzzle`
+  attachment, for 0.04 s, one effect per character. Its light is a plain `IsoLightSource(x, y, z, r, g, b, 18, life 6)`
+  on the character's tile added to `getCell():getLamppostPositions()` (`IsoLightSource` is exposed).
+- The `muzzle` attachment is read **live** from the model script every time (`ModelInstance.getAttachmentById` →
+  `modelScript.getAttachmentById`), and `BallisticsController` (~86, ~194) reads the same one for the bullet origin, the
+  aim ray and the tracer. `ModelScript` and `ModelAttachment` are exposed and `getOffset()` / `getRotate()` return mutable
+  `Vector3f`s (degrees for rotate). So Lua can set, for one shot,
+  `getScriptManager():getModelScript(<primary gun model>):getAttachmentById("muzzle"):getOffset():set(...)` to the left
+  gun's muzzle expressed in Prop1 space (`Prop1⁻¹ · Prop2 · left gun muzzle`, taken from our own dual-pistol fire clip at
+  the shot frame), and restore it afterwards. The engine then draws its real 3D flash, the tracer and the bullet ray from
+  the left gun. `HandWeapon:setMuzzleFlashModelKey(nil)` (public) switches the flash model off instead, if wanted.
+- Caveats: the model script is shared by every gun of that model on that client, so another player firing the same gun
+  model right-handed inside the window gets the displaced point; restore the offset every tick as a safety net. Remote
+  clients start the flash from the hit packet (`Player.attack`), so they apply the same offset while that player's
+  `TDW_Hand` is `L`. The relative pose of the two guns must be the same in every aim clip we author (vertical aim blends
+  included). Untested in game.
+- Fallback with no engine help: a sprite (`media/textures/weapons/firearm/fx/muzzle_flash_0N.png`) drawn in
+  `OnPreUIDraw` at `isoToScreenX/Y` of the muzzle position computed from the player's position, facing and our clip
+  (Lua cannot read bone positions: `AnimationPlayer` is not exposed). It draws over walls and characters.
+
+**In-game prototype, in order:** (a) one mirrored clip + node keyed on `TDW_Hand`, set by a debug key, in SP: does the
+node win and the weapon stay in the left hand; (b) `setUseHandWeapon(secondary)` in SP: damage, condition, XP from the
+off-hand weapon; (c) MP with two clients (`TienGiveItemMP` mptest on the Mac, or two Steam/non-Steam clients here):
+remote swing visible, zombie health stays, ID swap timing.
+
 ## Open questions (for the user)
 
 - **Primary empty, weapon only in the off hand:** should plain attack swing it automatically (Brutal Handwork did)?
 - **Melee primary + handgun secondary:** does modifier + attack fire the off-hand gun alone, or is that "shooting only
-  from the off hand", which is not allowed?
+  from the off hand", which is not allowed? If allowed: swap hands while the off-hand key is held (recommended, see
+  "Gun + melee"), or fire from the off hand with melee aiming rules?
 - **Off-hand penalties:** accuracy, damage, swing speed and crit for the off hand, and their sandbox options. Should there
   be an "Ambidextrous" trait?
 - **XP, endurance and condition** for an off-hand swing and a double swing: each weapon its own skill XP, both lose
