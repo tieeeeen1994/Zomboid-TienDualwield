@@ -1,0 +1,33 @@
+VERSION = 1,
+
+option TienDualwield.SwapHands
+{
+    type = boolean,
+    default = true,
+    page = TienDualwield,
+    translation = TienDualwield_SwapHands,
+}
+
+option TienDualwield.OffhandAttack
+{
+    type = boolean,
+    default = true,
+    page = TienDualwield,
+    translation = TienDualwield_OffhandAttack,
+}
+
+option TienDualwield.BothAttack
+{
+    type = boolean,
+    default = true,
+    page = TienDualwield,
+    translation = TienDualwield_BothAttack,
+}
+
+option TienDualwield.DualHandguns
+{
+    type = boolean,
+    default = true,
+    page = TienDualwield,
+    translation = TienDualwield_DualHandguns,
+}

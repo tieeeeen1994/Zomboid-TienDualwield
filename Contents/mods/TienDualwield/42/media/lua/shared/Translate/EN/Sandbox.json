@@ -1,0 +1,11 @@
+{
+    "Sandbox_TienDualwield": "Tien's Dual Wield",
+    "Sandbox_TienDualwield_SwapHands": "Swap hands",
+    "Sandbox_TienDualwield_SwapHands_tooltip": "A key (set in Key Bindings, under Dual Wield) swaps the items in your two hands, for example to reload the other handgun.",
+    "Sandbox_TienDualwield_OffhandAttack": "Off-hand attacks",
+    "Sandbox_TienDualwield_OffhandAttack_tooltip": "With a one-handed weapon in each hand, holding the off-hand modifier key while attacking swings the weapon in the off hand (left hand) instead.",
+    "Sandbox_TienDualwield_BothAttack": "Attack with both hands",
+    "Sandbox_TienDualwield_BothAttack_tooltip": "With a one-handed melee weapon in each hand, a key swings both weapons at once.",
+    "Sandbox_TienDualwield_DualHandguns": "Two handguns",
+    "Sandbox_TienDualwield_DualHandguns_tooltip": "With a handgun in each hand, every shot fires both guns. The off-hand gun never fires alone, and reloading always reloads the gun in your main hand: swap hands to reload the other one."
+}

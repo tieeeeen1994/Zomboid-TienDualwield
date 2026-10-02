@@ -1,0 +1,16 @@
+version=1
+title=Tien's Dual Wield
+description=Fight with a weapon in each hand, built for multiplayer from the start. In development.
+description=
+description=[list]
+description=[*][b]Swap hands:[/b] a key swaps the items in your two hands.
+description=[*][b]Off-hand attacks:[/b] with a one-handed weapon in each hand (melee or handgun), hold the off-hand key while attacking to swing the weapon in your left hand.
+description=[*][b]Attack with both hands:[/b] with two one-handed melee weapons, a key swings both at once.
+description=[*][b]Two handguns:[/b] every shot fires both guns. The off-hand gun never fires alone. Reloading always reloads the gun in your main hand; swap hands to reload the other one.
+description=[/list]
+description=
+description=Keys are set in the game's Key Bindings, under Dual Wield. Each feature can be switched off in the sandbox options.
+description=
+description=Build 42 only. In multiplayer the server needs it in its mod list like any other mod.
+tags=Build 42;Weapons;Multiplayer
+visibility=private

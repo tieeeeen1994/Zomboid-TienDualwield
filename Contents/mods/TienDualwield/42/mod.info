@@ -1,0 +1,6 @@
+name=Tien's Dual Wield
+id=TienDualwield
+description=Fight with a weapon in each hand. Swap the weapons between your hands with a key, swing the off-hand weapon with a modifier key, or swing both at once. Two handguns always fire together. Built for multiplayer.
+author=Tien
+modversion=0.1.0
+category=Weapons
